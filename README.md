@@ -18,7 +18,15 @@ ConfigManager is a .NET library that provides a convenient way to manage applica
 
 ## Installation
 
-Add a reference to the ConfigManager assembly in your project.
+Install the AaTurpin.ConfigManager package from NuGet:
+
+```bash
+Install-Package AaTurpin.ConfigManager
+# or
+dotnet add package AaTurpin.ConfigManager
+```
+
+Package URL: [NuGet Gallery](https://www.nuget.org/packages/AaTurpin.ConfigManager)
 
 ## Usage
 

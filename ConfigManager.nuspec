@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package >
+  <metadata>
+    <id>AaTurpin.ConfigManager</id>
+    <version>1.0.0</version>
+    <title>AaTurpin.ConfigManager</title>
+    <authors>aaturpin</authors>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <license type="expression">MIT</license>
+    <!-- <icon>icon.png</icon> -->
+    <projectUrl>https://github.com/aturpin0504/ConfigManager</projectUrl>
+    <description>A comprehensive .NET library for managing application configuration with support for type-safe settings, directory entries, and network drive mappings. ConfigManager simplifies reading and writing app.config values, handling directories with exclusion paths, and maintaining drive mappings with integrated logging via RunLog.</description>
+    <releaseNotes>Initial Release.</releaseNotes>
+    <copyright>Copyright 2025</copyright>
+    <tags>configuration config app.config xml settings directory drive-mapping</tags>
+    <readme>README.md</readme>
+  </metadata>
+  <files>
+    <file src="README.md" target="README.md" />
+  </files>
+</package>
