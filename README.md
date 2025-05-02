@@ -177,9 +177,13 @@ The configuration file should have the following structure:
   </appSettings>
   
   <directories>
-    <directory path="C:\MyApp\Data" exclusions="temp,logs\archive,old_files" />
-    <directory path="C:\MyApp\Logs" />
-  </directories>
+	<directory path="C:\MyApp\Data">
+		<exclude>temp</exclude>
+		<exclude>logs\archive</exclude>
+		<exclude>old_files</exclude>
+	</directory>
+	<directory path="C:\MyApp\Logs" />
+</directories>
   
   <driveMappings>
     <mapping driveLetter="V:" uncPath="\\server\share" />
