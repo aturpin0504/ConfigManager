@@ -10,7 +10,20 @@
     <!-- <icon>icon.png</icon> -->
     <projectUrl>https://github.com/aturpin0504/ConfigManager</projectUrl>
     <description>A comprehensive .NET library for managing application configuration with support for type-safe settings, directory entries, and network drive mappings. ConfigManager simplifies reading and writing app.config values, handling directories with exclusion paths, and maintaining drive mappings with integrated logging via RunLog.</description>
-    <releaseNotes>Updated Readme to reflect correct Nuget links.</releaseNotes>
+    <releaseNotes>
+      Version 1.1.0 - ConfigHelper.cs Changes:
+      - Added enhanced validation for drive letter and UNC path formats
+      - Improved error handling with detailed warning messages for invalid entries
+      - Added statistics logging for skipped entries during configuration loading
+      - Simplified DirectoryEntry class with direct string[] property for exclusions
+      - Consolidated DirectoryConfig and DirectoryEntry into a single implementation
+      - Fixed handling of directory entries with missing attributes
+      - Added case-insensitive string comparison for drive mappings
+      - Improved regex validation for drive letter format
+      - Enhanced error reporting with logging of specific entries that fail validation
+      - Added safeguards against empty or malformed config entries
+      - Updated RunLog to version 3.2.0 for improved logging capabilities
+    </releaseNotes>
     <copyright>Copyright 2025</copyright>
     <tags>configuration config app.config xml settings directory drive-mapping</tags>
     <readme>README.md</readme>

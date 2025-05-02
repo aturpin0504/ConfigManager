@@ -6,76 +6,16 @@ using System.IO;
 using System.Linq;
 using System.Xml;
 using System.Xml.Linq;
+using System.Text.RegularExpressions;
 
 namespace ConfigManager
 {
-    /// <summary>
-    /// Represents a directory entry in the configuration
-    /// </summary>
-    public class DirectoryEntry
-    {
-        /// <summary>
-        /// Path of the directory
-        /// </summary>
-        public string Path { get; set; }
-
-        /// <summary>
-        /// Optional comma-separated list of exclusions
-        /// </summary>
-        public string Exclusions { get; set; }
-
-        /// <summary>
-        /// Gets the exclusions as an array of strings
-        /// </summary>
-        public string[] ExclusionsArray
-        {
-            get
-            {
-                if (string.IsNullOrWhiteSpace(Exclusions))
-                    return new string[0];
-
-                return Exclusions.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(e => e.Trim())
-                    .ToArray();
-            }
-        }
-
-        public override string ToString()
-        {
-            if (string.IsNullOrWhiteSpace(Exclusions))
-                return Path;
-            else
-                return $"{Path} (Exclusions: {Exclusions})";
-        }
-    }
-
-    /// <summary>
-    /// Represents a drive mapping entry in the configuration
-    /// </summary>
-    public class DriveMapping
-    {
-        /// <summary>
-        /// The drive letter (e.g., "V:")
-        /// </summary>
-        public string DriveLetter { get; set; }
-
-        /// <summary>
-        /// The UNC path to map to (e.g., "\\server\share")
-        /// </summary>
-        public string UncPath { get; set; }
-
-        public override string ToString()
-        {
-            return $"{DriveLetter} -> {UncPath}";
-        }
-    }
-
     /// <summary>
     /// Static helper class to assist with getting and setting values in app.config
     /// </summary>
     public static class ConfigHelper
     {
-        private static Logger _logger;
+        private static Logger _logger = Log.Logger;
         private static bool _configSectionsValidated = false;
         private static readonly object _validationLock = new object();
 
@@ -85,7 +25,6 @@ namespace ConfigManager
         /// </summary>
         static ConfigHelper()
         {
-            _logger = Log.Logger;
             // Ensure config sections exist during static initialization
             EnsureConfigSectionsExist();
         }
@@ -96,10 +35,7 @@ namespace ConfigManager
         /// <param name="logger">An ILogger implementation</param>
         public static void SetLogger(Logger logger)
         {
-            if (logger == null)
-                throw new ArgumentNullException(nameof(logger));
-
-            _logger = logger;
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _logger.Information("ConfigHelper logger has been configured.");
         }
 
@@ -124,7 +60,23 @@ namespace ConfigManager
 
                 try
                 {
-                    // Handle different type conversions
+                    // Handle collection types
+                    if (typeof(T) == typeof(List<string>) || typeof(T) == typeof(IList<string>) || typeof(T) == typeof(IEnumerable<string>))
+                    {
+                        var items = value.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                            .Select(s => s.Trim())
+                            .ToList();
+                        return (T)(object)items;
+                    }
+
+                    // Use TypeConverter for more robust conversion
+                    var converter = System.ComponentModel.TypeDescriptor.GetConverter(typeof(T));
+                    if (converter != null && converter.CanConvertFrom(typeof(string)))
+                    {
+                        return (T)converter.ConvertFromString(value);
+                    }
+
+                    // Original type conversions as fallback
                     if (typeof(T) == typeof(string))
                     {
                         return (T)(object)value;
@@ -183,17 +135,48 @@ namespace ConfigManager
         {
             try
             {
+                // Convert value to string based on type
+                string stringValue;
+
+                // Handle collection types
+                if (value is IEnumerable<string> stringCollection)
+                {
+                    stringValue = string.Join(",", stringCollection);
+                }
+                // Handle custom formatting for certain types
+                else if (value is DateTime dateValue)
+                {
+                    stringValue = dateValue.ToString("o"); // ISO 8601 format
+                }
+                else if (value is double || value is float || value is decimal)
+                {
+                    // Use invariant culture for numeric values
+                    stringValue = Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
+                }
+                else
+                {
+                    // Default toString for other types
+                    stringValue = value?.ToString() ?? string.Empty;
+                }
+
+                // Validation before saving (optional)
+                if (string.IsNullOrEmpty(key))
+                {
+                    _logger.Error("Cannot set configuration with empty key");
+                    return false;
+                }
+
                 var config = ConfigurationManager.OpenExeConfiguration(ConfigurationUserLevel.None);
 
                 if (config.AppSettings.Settings[key] != null)
                 {
-                    config.AppSettings.Settings[key].Value = value.ToString();
-                    _logger.Debug($"Updated configuration key '{key}' to value '{value}'");
+                    config.AppSettings.Settings[key].Value = stringValue;
+                    _logger.Debug($"Updated configuration key '{key}' to value '{stringValue}'");
                 }
                 else
                 {
-                    config.AppSettings.Settings.Add(key, value.ToString());
-                    _logger.Debug($"Added new configuration key '{key}' with value '{value}'");
+                    config.AppSettings.Settings.Add(key, stringValue);
+                    _logger.Debug($"Added new configuration key '{key}' with value '{stringValue}'");
                 }
 
                 config.Save(ConfigurationSaveMode.Modified);
@@ -208,76 +191,63 @@ namespace ConfigManager
         }
 
         /// <summary>
-        /// Gets a list of directory entries from the 'directories' section in app.config
+        /// Gets a list of directory configurations from the 'directories' section in app.config
         /// </summary>
-        /// <returns>A list of DirectoryEntry objects</returns>
-        public static List<DirectoryEntry> GetDirectories()
+        /// <returns>A list of DirectoryConfig objects</returns>
+        public static List<DirectoryConfig> GetDirectories()
         {
+            var result = new List<DirectoryConfig>();
+
             try
             {
-                var directories = new List<DirectoryEntry>();
                 var configFilePath = ConfigurationManager.OpenExeConfiguration(ConfigurationUserLevel.None).FilePath;
+                XDocument doc = XDocument.Load(configFilePath);
 
                 _logger.Debug($"Loading directories from config file: {configFilePath}");
 
-                XDocument doc = XDocument.Load(configFilePath);
-                var directoriesElement = doc.Root.Element("directories");
-
+                var directoriesElement = doc.Root?.Element("directories");
                 if (directoriesElement == null)
                 {
                     _logger.Warning("'directories' section not found in config file");
-                    return directories;
+                    return result;
                 }
 
-                int entryIndex = 0;
-                int validEntries = 0;
-                int skippedEntries = 0;
-
-                foreach (var directoryElement in directoriesElement.Elements("directory"))
+                // Get all directory elements
+                var directoryElements = directoriesElement.Elements("directory");
+                foreach (var dirElement in directoryElements)
                 {
-                    entryIndex++;
-
-                    try
+                    var pathAttr = dirElement.Attribute("path");
+                    if (pathAttr == null)
                     {
-                        var pathAttribute = directoryElement.Attribute("path");
-                        var exclusionsAttribute = directoryElement.Attribute("exclusions");
-
-                        if (pathAttribute == null)
-                        {
-                            _logger.Warning($"Directory entry at index {entryIndex} skipped: Missing required 'path' attribute");
-                            skippedEntries++;
-                            continue;
-                        }
-
-                        if (string.IsNullOrWhiteSpace(pathAttribute.Value))
-                        {
-                            _logger.Warning($"Directory entry at index {entryIndex} skipped: Empty 'path' attribute");
-                            skippedEntries++;
-                            continue;
-                        }
-
-                        directories.Add(new DirectoryEntry
-                        {
-                            Path = pathAttribute.Value,
-                            Exclusions = exclusionsAttribute?.Value
-                        });
-
-                        validEntries++;
+                        _logger.Warning("Found directory element without path attribute");
+                        continue;
                     }
-                    catch (Exception ex)
+
+                    var dirConfig = new DirectoryConfig
                     {
-                        _logger.Warning($"Error processing directory entry at index {entryIndex}. Entry will be skipped: {ex.Message}");
-                        skippedEntries++;
+                        Path = pathAttr.Value
+                    };
+
+                    // Get optional exclude elements (using the element format rather than attribute)
+                    var excludeElements = dirElement.Elements("exclude");
+                    foreach (var excludeElement in excludeElements)
+                    {
+                        if (!string.IsNullOrWhiteSpace(excludeElement.Value))
+                        {
+                            dirConfig.Exclusions.Add(excludeElement.Value);
+                        }
                     }
+
+                    result.Add(dirConfig);
                 }
 
-                _logger.Information($"Loaded {validEntries} directories from config (skipped {skippedEntries} invalid entries)");
-                return directories;
+                _logger.Information($"Loaded {result.Count} directories from config");
+                return result;
             }
             catch (Exception ex)
             {
                 _logger.Error(ex, "Error retrieving directories from configuration");
-                return new List<DirectoryEntry>();
+                return new List<DirectoryConfig>();
             }
         }
 
@@ -287,94 +257,52 @@ namespace ConfigManager
         /// <returns>A list of DriveMapping objects</returns>
         public static List<DriveMapping> GetDriveMappings()
         {
+            var result = new List<DriveMapping>();
+
             try
             {
-                var mappings = new List<DriveMapping>();
                 var configFilePath = ConfigurationManager.OpenExeConfiguration(ConfigurationUserLevel.None).FilePath;
+                XDocument doc = XDocument.Load(configFilePath);
 
                 _logger.Debug($"Loading drive mappings from config file: {configFilePath}");
 
-                XDocument doc = XDocument.Load(configFilePath);
-                var mappingsElement = doc.Root.Element("driveMappings");
-
+                var mappingsElement = doc.Root?.Element("driveMappings");
                 if (mappingsElement == null)
                 {
                     _logger.Warning("'driveMappings' section not found in config file");
-                    return mappings;
+                    return result;
                 }
 
-                int mappingIndex = 0;
-                int validMappings = 0;
-                int skippedMappings = 0;
-
-                foreach (var mappingElement in mappingsElement.Elements("mapping"))
+                // Get all mapping elements
+                var mappingElements = mappingsElement.Elements("mapping");
+                foreach (var mappingElement in mappingElements)
                 {
-                    mappingIndex++;
+                    var driveLetterAttr = mappingElement.Attribute("driveLetter");
+                    var uncPathAttr = mappingElement.Attribute("uncPath");
 
-                    try
+                    if (driveLetterAttr == null || uncPathAttr == null)
                     {
-                        var driveLetterAttribute = mappingElement.Attribute("driveLetter");
-                        var uncPathAttribute = mappingElement.Attribute("uncPath");
-
-                        if (driveLetterAttribute == null)
-                        {
-                            _logger.Warning($"Drive mapping at index {mappingIndex} skipped: Missing required 'driveLetter' attribute");
-                            skippedMappings++;
-                            continue;
-                        }
-
-                        if (uncPathAttribute == null)
-                        {
-                            _logger.Warning($"Drive mapping at index {mappingIndex} skipped: Missing required 'uncPath' attribute");
-                            skippedMappings++;
-                            continue;
-                        }
-
-                        if (string.IsNullOrWhiteSpace(driveLetterAttribute.Value))
-                        {
-                            _logger.Warning($"Drive mapping at index {mappingIndex} skipped: Empty 'driveLetter' attribute");
-                            skippedMappings++;
-                            continue;
-                        }
-
-                        if (string.IsNullOrWhiteSpace(uncPathAttribute.Value))
-                        {
-                            _logger.Warning($"Drive mapping at index {mappingIndex} skipped: Empty 'uncPath' attribute");
-                            skippedMappings++;
-                            continue;
-                        }
-
-                        // Additional validation for drive letter format
-                        string driveLetter = driveLetterAttribute.Value;
-                        if (!driveLetter.EndsWith(":") || driveLetter.Length != 2)
-                        {
-                            _logger.Warning($"Drive mapping at index {mappingIndex} has potentially invalid drive letter format: '{driveLetter}'. Adding anyway, but verify format.");
-                        }
-
-                        // Additional validation for UNC path format
-                        string uncPath = uncPathAttribute.Value;
-                        if (!uncPath.StartsWith("\\\\"))
-                        {
-                            _logger.Warning($"Drive mapping at index {mappingIndex} has potentially invalid UNC path format: '{uncPath}'. Adding anyway, but verify format.");
-                        }
-
-                        mappings.Add(new DriveMapping
-                        {
-                            DriveLetter = driveLetter,
-                            UncPath = uncPath
-                        });
-
-                        validMappings++;
+                        _logger.Warning("Found mapping element with missing attributes");
+                        continue;
                     }
-                    catch (Exception ex)
+
+                    if (string.IsNullOrWhiteSpace(driveLetterAttr.Value) || string.IsNullOrWhiteSpace(uncPathAttr.Value))
                     {
-                        _logger.Warning($"Error processing drive mapping at index {mappingIndex}. Mapping will be skipped: {ex.Message}");
-                        skippedMappings++;
+                        _logger.Warning("Drive mapping found with empty attribute values");
+                        continue;
                     }
+
+                    var driveMapping = new DriveMapping
+                    {
+                        DriveLetter = driveLetterAttr.Value,
+                        UncPath = uncPathAttr.Value
+                    };
+
+                    result.Add(driveMapping);
                 }
 
-                _logger.Information($"Loaded {validMappings} drive mappings from config (skipped {skippedMappings} invalid mappings)");
-                return mappings;
+                _logger.Information($"Loaded {result.Count} drive mappings from config");
+                return result;
             }
             catch (Exception ex)
             {
@@ -386,11 +314,11 @@ namespace ConfigManager
         /// <summary>
         /// Adds a new directory entry to the 'directories' section in app.config
         /// </summary>
-        /// <param name="directoryEntry">The directory entry to add</param>
+        /// <param name="directoryConfig">The directory config to add</param>
         /// <returns>True if successful, false otherwise</returns>
-        public static bool AddDirectory(DirectoryEntry directoryEntry)
+        public static bool AddDirectory(DirectoryConfig directoryConfig)
         {
-            if (directoryEntry == null || string.IsNullOrWhiteSpace(directoryEntry.Path))
+            if (directoryConfig == null || string.IsNullOrWhiteSpace(directoryConfig.Path))
             {
                 _logger.Error("Cannot add directory with null or empty path");
                 return false;
@@ -410,39 +338,41 @@ namespace ConfigManager
 
                 // Check if the directory entry already exists
                 var existingEntry = directoriesElement.Elements("directory")
-                    .FirstOrDefault(e => e.Attribute("path")?.Value == directoryEntry.Path);
+                    .FirstOrDefault(e => e.Attribute("path")?.Value == directoryConfig.Path);
 
                 if (existingEntry != null)
                 {
-                    // Update existing entry
-                    if (string.IsNullOrWhiteSpace(directoryEntry.Exclusions))
+                    // Update existing entry - remove all existing exclude elements
+                    existingEntry.Elements("exclude").Remove();
+
+                    // Add new exclude elements
+                    foreach (var exclusion in directoryConfig.Exclusions)
                     {
-                        existingEntry.Attribute("exclusions")?.Remove();
-                    }
-                    else
-                    {
-                        var exclusionsAttr = existingEntry.Attribute("exclusions");
-                        if (exclusionsAttr != null)
-                            exclusionsAttr.Value = directoryEntry.Exclusions;
-                        else
-                            existingEntry.Add(new XAttribute("exclusions", directoryEntry.Exclusions));
+                        if (!string.IsNullOrWhiteSpace(exclusion))
+                        {
+                            existingEntry.Add(new XElement("exclude", exclusion));
+                        }
                     }
 
-                    _logger.Debug($"Updated directory entry: {directoryEntry.Path}");
+                    _logger.Debug($"Updated directory entry: {directoryConfig.Path}");
                 }
                 else
                 {
                     // Create new entry
                     var newElement = new XElement("directory",
-                        new XAttribute("path", directoryEntry.Path));
+                        new XAttribute("path", directoryConfig.Path));
 
-                    if (!string.IsNullOrWhiteSpace(directoryEntry.Exclusions))
+                    // Add exclusions as child elements
+                    foreach (var exclusion in directoryConfig.Exclusions)
                     {
-                        newElement.Add(new XAttribute("exclusions", directoryEntry.Exclusions));
+                        if (!string.IsNullOrWhiteSpace(exclusion))
+                        {
+                            newElement.Add(new XElement("exclude", exclusion));
+                        }
                     }
 
                     directoriesElement.Add(newElement);
-                    _logger.Debug($"Added new directory entry: {directoryEntry.Path}");
+                    _logger.Debug($"Added new directory entry: {directoryConfig.Path}");
                 }
 
                 doc.Save(configFilePath);
@@ -450,7 +380,7 @@ namespace ConfigManager
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, $"Error adding directory entry: {directoryEntry.Path}");
+                _logger.Error(ex, $"Error adding directory entry: {directoryConfig.Path}");
                 return false;
             }
         }
@@ -466,20 +396,6 @@ namespace ConfigManager
                 string.IsNullOrWhiteSpace(driveMapping.UncPath))
             {
                 _logger.Error("Cannot add drive mapping with null or empty values");
-                return false;
-            }
-
-            // Validate drive letter format: must be a single letter followed by a colon
-            if (!System.Text.RegularExpressions.Regex.IsMatch(driveMapping.DriveLetter, @"^[A-Za-z]:$"))
-            {
-                _logger.Error($"Invalid drive letter format: '{driveMapping.DriveLetter}'. Format must be a single letter followed by a colon (e.g., 'X:')");
-                return false;
-            }
-
-            // Validate UNC path format: must start with double backslash
-            if (!driveMapping.UncPath.StartsWith("\\\\"))
-            {
-                _logger.Error($"Invalid UNC path format: '{driveMapping.UncPath}'. UNC path must start with double backslash (e.g., '\\\\server\\share')");
                 return false;
             }
 
@@ -579,7 +495,7 @@ namespace ConfigManager
         /// <summary>
         /// Removes a drive mapping from the 'driveMappings' section in app.config
         /// </summary>
-        /// <param name="driveLetter">The drive letter of the mapping to remove</param>
+        /// <param name="driveLetter">The drive letter of the mapping to remove (with or without colon)</param>
         /// <returns>True if successful, false otherwise</returns>
         public static bool RemoveDriveMapping(string driveLetter)
         {
@@ -588,6 +504,9 @@ namespace ConfigManager
                 _logger.Error("Cannot remove drive mapping with null or empty drive letter");
                 return false;
             }
+
+            // Ensure the drive letter has a colon for proper matching
+            string normalizedDriveLetter = EnsureDriveLetterHasColon(driveLetter);
 
             try
             {
@@ -601,25 +520,43 @@ namespace ConfigManager
                     return false;
                 }
 
+                // First try exact match
                 var mappingElement = mappingsElement.Elements("mapping")
-                    .FirstOrDefault(m => m.Attribute("driveLetter")?.Value == driveLetter);
+                    .FirstOrDefault(m => m.Attribute("driveLetter")?.Value == normalizedDriveLetter);
+
+                // If not found, try case-insensitive match
+                if (mappingElement == null)
+                {
+                    mappingElement = mappingsElement.Elements("mapping")
+                        .FirstOrDefault(m => string.Equals(m.Attribute("driveLetter")?.Value, normalizedDriveLetter, StringComparison.OrdinalIgnoreCase));
+                }
+
+                // If still not found, try matching without colon if user provided with colon
+                if (mappingElement == null && normalizedDriveLetter.EndsWith(":"))
+                {
+                    string driveLetterWithoutColon = normalizedDriveLetter.TrimEnd(':');
+                    mappingElement = mappingsElement.Elements("mapping")
+                        .FirstOrDefault(m => m.Attribute("driveLetter")?.Value == driveLetterWithoutColon ||
+                                           m.Attribute("driveLetter")?.Value == driveLetterWithoutColon + ":");
+                }
 
                 if (mappingElement != null)
                 {
+                    string originalDriveLetter = mappingElement.Attribute("driveLetter")?.Value;
                     mappingElement.Remove();
                     doc.Save(configFilePath);
-                    _logger.Debug($"Removed drive mapping: {driveLetter}");
+                    _logger.Debug($"Removed drive mapping: {originalDriveLetter}");
                     return true;
                 }
                 else
                 {
-                    _logger.Warning($"Drive mapping not found: {driveLetter}");
+                    _logger.Warning($"Drive mapping not found: {normalizedDriveLetter}");
                     return false;
                 }
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, $"Error removing drive mapping: {driveLetter}");
+                _logger.Error(ex, $"Error removing drive mapping: {normalizedDriveLetter}");
                 return false;
             }
         }
@@ -717,7 +654,7 @@ namespace ConfigManager
                         }
                     }
 
-                    // Check that the actual sections exist in the config
+                    // Check that the actual directories section exists in the config
                     var directoriesElement = doc.Root.Element("directories");
                     if (directoriesElement == null)
                     {
@@ -726,10 +663,13 @@ namespace ConfigManager
                         _logger.Debug("Added missing 'directories' element");
                     }
 
+                    // Check that the actual driveMappings section exists in the config
                     var driveMappingsElement = doc.Root.Element("driveMappings");
                     if (driveMappingsElement == null)
                     {
-                        doc.Root.Add(new XElement("driveMappings"));
+                        // Create an empty driveMappings element without any sample mappings
+                        var newDriveMappingsElement = new XElement("driveMappings");
+                        doc.Root.Add(newDriveMappingsElement);
                         configChanged = true;
                         _logger.Debug("Added missing 'driveMappings' element");
                     }
@@ -773,6 +713,59 @@ namespace ConfigManager
                     return false;
                 }
             }
+        }
+
+        /// <summary>
+        /// Ensures that a drive letter ends with a colon
+        /// </summary>
+        /// <param name="driveLetter">The drive letter to normalize</param>
+        /// <returns>The drive letter with a colon</returns>
+        private static string EnsureDriveLetterHasColon(string driveLetter)
+        {
+            if (string.IsNullOrEmpty(driveLetter))
+                return driveLetter;
+
+            // Remove any trailing non-letter characters
+            string cleanedDriveLetter = driveLetter.Trim();
+
+            // If it's already properly formatted with a colon, return as is
+            if (Regex.IsMatch(cleanedDriveLetter, @"^[A-Za-z]:$"))
+                return cleanedDriveLetter;
+
+            // If it's just a letter without a colon, add the colon
+            if (Regex.IsMatch(cleanedDriveLetter, @"^[A-Za-z]$"))
+                return cleanedDriveLetter + ":";
+
+            // If it ends with a colon but has other characters, extract just the letter and colon
+            Match match = Regex.Match(cleanedDriveLetter, @"([A-Za-z]):?");
+            if (match.Success)
+                return match.Groups[1].Value + ":";
+
+            // If we can't extract a valid drive letter, return the original
+            return driveLetter;
+        }
+    }
+
+    /// <summary>
+    /// Represents a directory entry with its path and exclusions
+    /// </summary>
+    public class DirectoryConfig
+    {
+        public string Path { get; set; }
+        public List<string> Exclusions { get; set; } = new List<string>();
+    }
+
+    /// <summary>
+    /// Represents a drive mapping entry with drive letter and UNC path
+    /// </summary>
+    public class DriveMapping
+    {
+        public string DriveLetter { get; set; }
+        public string UncPath { get; set; }
+
+        public override string ToString()
+        {
+            return $"{DriveLetter} -> {UncPath}";
         }
     }
 }

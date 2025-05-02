@@ -7,9 +7,10 @@ ConfigManager is a .NET library that provides a convenient way to manage applica
 - **Type-safe configuration access**: Retrieve strongly-typed configuration values
 - **Default value support**: Specify fallback values for missing configuration entries
 - **Directory management**: Add, retrieve, and remove directory entries with optional exclusion patterns
-- **Drive mapping support**: Define and manage network drive mappings
+- **Drive mapping support**: Define and manage network drive mappings with enhanced validation
 - **Automatic configuration validation**: Ensures required configuration sections exist
-- **Comprehensive logging**: Integrated logging for configuration operations
+- **Comprehensive logging**: Integrated logging for configuration operations with detailed statistics
+- **Robust error handling**: Detailed diagnostics and validation for configuration entries
 
 ## Requirements
 
@@ -50,28 +51,28 @@ ConfigHelper.SetValue("MaxConnections", 100);
 
 ```csharp
 // Get all directory entries from config
-List<DirectoryEntry> directories = ConfigHelper.GetDirectories();
+List<DirectoryConfig> directories = ConfigHelper.GetDirectories();
 
 // Display directory entries
 foreach (var dir in directories)
 {
     Console.WriteLine($"Directory: {dir.Path}");
     
-    if (dir.ExclusionsArray.Length > 0)
+    if (dir.Exclusions.Count > 0)
     {
         Console.WriteLine("Excluded subdirectories:");
-        foreach (var exclusion in dir.ExclusionsArray)
+        foreach (var exclusion in dir.Exclusions)
         {
             Console.WriteLine($"  - {exclusion}");
         }
     }
 }
 
-// Add a new directory entry with relative path exclusions using Windows path separators
-var newDir = new DirectoryEntry
+// Add a new directory entry with exclusions
+var newDir = new DirectoryConfig
 {
     Path = @"C:\MyApplication\Data",
-    Exclusions = @"temp,logs\archive,reports\old"
+    Exclusions = new List<string> { "temp", @"logs\archive", @"reports\old" }
 };
 ConfigHelper.AddDirectory(newDir);
 
@@ -103,6 +104,28 @@ ConfigHelper.AddDriveMapping(newMapping);
 ConfigHelper.RemoveDriveMapping("V:");
 ```
 
+### Enhanced Validation for Drive Mappings
+
+The library now includes improved validation for drive mappings:
+
+```csharp
+// This will fail validation and log an error due to invalid drive letter format
+var invalidMapping1 = new DriveMapping
+{
+    DriveLetter = "VDrive",  // Should be "V:"
+    UncPath = @"\\server\share"
+};
+
+// This will fail validation and log an error due to invalid UNC path format
+var invalidMapping2 = new DriveMapping
+{
+    DriveLetter = "X:",
+    UncPath = @"server\share"  // Should be "\\server\share"
+};
+
+// Both validations will generate detailed error messages in the log
+```
+
 ### Logging with RunLog
 
 ConfigManager uses the RunLog library for logging operations. RunLog is already integrated with ConfigHelper, and logging is configured automatically when the application starts.
@@ -123,10 +146,12 @@ Log.Logger = loggerConfig.CreateLogger();
 ConfigHelper.SetLogger(Log.Logger);
 ```
 
-Example logging output:
+Example logging output with enhanced diagnostics:
 
 ```
-[2025-04-26 10:15:23] [Information] Loaded 5 directories from config (skipped 0 invalid entries)
+[2025-04-26 10:15:23] [Information] Loaded 5 directories from config (skipped 2 invalid entries)
+[2025-04-26 10:15:23] [Warning] Directory entry at index 3 skipped: Missing required 'path' attribute
+[2025-04-26 10:15:23] [Warning] Directory entry at index 7 skipped: Empty 'path' attribute
 [2025-04-26 10:15:24] [Debug] Added new directory entry: C:\MyApplication\Data
 [2025-04-26 10:15:25] [Warning] Directory entry not found: C:\MyApplication\OldData
 ```
@@ -167,18 +192,26 @@ The configuration file should have the following structure:
 
 ConfigManager automatically validates and creates required configuration sections when initialized. The `EnsureConfigSectionsExist()` method is called during static initialization to make sure all necessary sections exist in your config file.
 
-## Error Handling
+## Error Handling and Validation
 
-The library includes comprehensive error handling with detailed logging. Operations that fail will return appropriate values (false for boolean operations, default values for getters) and log the error.
+The library includes comprehensive error handling with detailed logging. Operations that fail will return appropriate values (false for boolean operations, default values for getters) and log the error with specific diagnostic information, including:
+
+- Index of problematic entries in configuration
+- Validation failures with detailed reasons
+- Statistics on valid vs. skipped entries
+- Case-insensitive string comparison for more flexible matching
 
 ## Best Practices
 
 1. Always specify default values when using `GetValue<T>()` to handle missing configuration entries gracefully
 2. Use the strongly-typed methods rather than accessing the configuration values directly
-3. Validate drive letter and UNC path formats before adding drive mappings
-4. When defining directory exclusions, use relative paths (e.g., "logs\archive", "temp") that are relative to the main directory path
+3. Ensure drive letter format is correct (single letter followed by colon, e.g., "V:")
+4. Ensure UNC path format is correct (starts with double backslash, e.g., "\\\\server\\share")
+5. When defining directory exclusions:
+   - Use separate `<exclude>` elements for each path to exclude
+   - Use relative paths (e.g., "logs\\archive", "temp") that are relative to the main directory path
    - Both Windows backslash (`\`) and forward slash (`/`) path separators are supported
-5. Separate multiple exclusion paths with commas
+6. Check log output for validation warnings and errors after configuration changes
 
 ## License
 
