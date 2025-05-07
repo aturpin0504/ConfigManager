@@ -32,7 +32,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="RunLog, Version=2.0.0.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>packages\RunLog.3.2.0\lib\net472\RunLog.dll</HintPath>
+      <HintPath>packages\RunLog.3.3.0\lib\net472\RunLog.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Configuration" />

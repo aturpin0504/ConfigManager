@@ -4,18 +4,23 @@ ConfigManager is a .NET library that provides a convenient way to manage applica
 
 ## Features
 
-- **Type-safe configuration access**: Retrieve strongly-typed configuration values
+- **Type-safe configuration access**: Retrieve strongly-typed configuration values with improved type conversion
+- **Collection type support**: Handle List<string>, IEnumerable<string> and other collection types
 - **Default value support**: Specify fallback values for missing configuration entries
 - **Directory management**: Add, retrieve, and remove directory entries with optional exclusion patterns
 - **Drive mapping support**: Define and manage network drive mappings with enhanced validation
-- **Automatic configuration validation**: Ensures required configuration sections exist
-- **Comprehensive logging**: Integrated logging for configuration operations with detailed statistics
-- **Robust error handling**: Detailed diagnostics and validation for configuration entries
+- **Automatic configuration validation**: Ensures required configuration sections exist with thread-safe validation
+- **Improved XML handling**: Better XML parsing with XDocument instead of direct XML manipulation
+- **Comprehensive logging**: Integrated logging for configuration operations
+- **Thread-safe operation**: Double-check locking pattern for config section validation
+- **Culture-invariant formatting**: Numeric values use invariant culture to avoid regional issues
+- **Robust error handling**: Detailed error messages and validation for configuration entries
 
 ## Requirements
 
 - .NET Framework 4.7.2 or higher
 - System.Configuration namespace
+- RunLog 3.3.0 or higher
 
 ## Installation
 
@@ -42,6 +47,9 @@ int port = ConfigHelper.GetValue<int>("Port", 8080);
 
 // Get a boolean value
 bool enableLogging = ConfigHelper.GetValue<bool>("EnableLogging", false);
+
+// Get a collection value (comma or semicolon separated values)
+List<string> allowedIPs = ConfigHelper.GetValue<List<string>>("AllowedIPs", new List<string>());
 
 // Set a configuration value
 ConfigHelper.SetValue("MaxConnections", 100);
@@ -100,35 +108,38 @@ var newMapping = new DriveMapping
 };
 ConfigHelper.AddDriveMapping(newMapping);
 
-// Remove a drive mapping
+// Remove a drive mapping (with or without colon)
 ConfigHelper.RemoveDriveMapping("V:");
+// or
+ConfigHelper.RemoveDriveMapping("V");
 ```
 
-### Enhanced Validation for Drive Mappings
+### Improved Error Handling and Validation
 
-The library now includes improved validation for drive mappings:
+The library includes enhanced error handling with more detailed logging and validation:
 
 ```csharp
-// This will fail validation and log an error due to invalid drive letter format
-var invalidMapping1 = new DriveMapping
+// Drive letter normalization handles various formats
+ConfigHelper.AddDriveMapping(new DriveMapping
 {
-    DriveLetter = "VDrive",  // Should be "V:"
+    DriveLetter = "V",  // Will be normalized to "V:" automatically
     UncPath = @"\\server\share"
-};
+});
 
-// This will fail validation and log an error due to invalid UNC path format
-var invalidMapping2 = new DriveMapping
-{
-    DriveLetter = "X:",
-    UncPath = @"server\share"  // Should be "\\server\share"
-};
+// Case-insensitive comparison for drive mappings
+ConfigHelper.RemoveDriveMapping("v"); // Will match "V:" in config
 
-// Both validations will generate detailed error messages in the log
+// Error handling for invalid entries
+try {
+    ConfigHelper.AddDriveMapping(null); // Will log error and return false
+} catch (ArgumentNullException ex) {
+    // Exception handling
+}
 ```
 
-### Logging with RunLog
+### Logging with RunLog 3.3.0
 
-ConfigManager uses the RunLog library for logging operations. RunLog is already integrated with ConfigHelper, and logging is configured automatically when the application starts.
+ConfigManager uses RunLog 3.3.0 for enhanced logging operations:
 
 ```csharp
 // ConfigHelper uses Log.Logger by default, but you can customize it
@@ -136,8 +147,11 @@ ConfigManager uses the RunLog library for logging operations. RunLog is already 
 // Create a custom logger configuration
 var loggerConfig = new LoggerConfiguration()
     .MinimumLevel.Debug()
-    .WriteTo.Console()
-    .WriteTo.File("logs/config.log", rollingInterval: RollingInterval.Day);
+    .WriteTo.Console(LogLevel.Information)
+    .WriteTo.File("logs/config.log", 
+                  rollingInterval: RollingInterval.Day, 
+                  enableBuffering: true,  // New in RunLog 3.3.0
+                  bufferSize: 100);       // New in RunLog 3.3.0
 
 // Set the logger instance
 Log.Logger = loggerConfig.CreateLogger();
@@ -146,17 +160,16 @@ Log.Logger = loggerConfig.CreateLogger();
 ConfigHelper.SetLogger(Log.Logger);
 ```
 
-Example logging output with enhanced diagnostics:
+Example logging output with improved detail:
 
 ```
-[2025-04-26 10:15:23] [Information] Loaded 5 directories from config (skipped 2 invalid entries)
-[2025-04-26 10:15:23] [Warning] Directory entry at index 3 skipped: Missing required 'path' attribute
-[2025-04-26 10:15:23] [Warning] Directory entry at index 7 skipped: Empty 'path' attribute
-[2025-04-26 10:15:24] [Debug] Added new directory entry: C:\MyApplication\Data
+[2025-04-26 10:15:23] [Information] Loaded 5 directories from config
+[2025-04-26 10:15:23] [Debug] Directory at path 'C:\MyApplication\Data' loaded with 3 exclusions
+[2025-04-26 10:15:24] [Debug] Updated directory entry: C:\MyApplication\Data
 [2025-04-26 10:15:25] [Warning] Directory entry not found: C:\MyApplication\OldData
 ```
 
-RunLog provides various log levels (Verbose, Debug, Information, Warning, Error, Fatal) and multiple output destinations including console and file with rolling options.
+RunLog 3.3.0 provides various log levels (Verbose, Debug, Information, Warning, Error, Fatal) and multiple output destinations with improved performance through optional buffering and background processing.
 
 ## Configuration File Structure
 
@@ -174,16 +187,17 @@ The configuration file should have the following structure:
     <add key="ServerName" value="myserver" />
     <add key="Port" value="8080" />
     <add key="EnableLogging" value="true" />
+    <add key="AllowedIPs" value="192.168.1.1,192.168.1.2,10.0.0.1" />
   </appSettings>
   
   <directories>
-	<directory path="C:\MyApp\Data">
-		<exclude>temp</exclude>
-		<exclude>logs\archive</exclude>
-		<exclude>old_files</exclude>
-	</directory>
-	<directory path="C:\MyApp\Logs" />
-</directories>
+    <directory path="C:\MyApp\Data">
+        <exclude>temp</exclude>
+        <exclude>logs\archive</exclude>
+        <exclude>old_files</exclude>
+    </directory>
+    <directory path="C:\MyApp\Logs" />
+  </directories>
   
   <driveMappings>
     <mapping driveLetter="V:" uncPath="\\server\share" />
@@ -194,28 +208,30 @@ The configuration file should have the following structure:
 
 ## Configuration Validation
 
-ConfigManager automatically validates and creates required configuration sections when initialized. The `EnsureConfigSectionsExist()` method is called during static initialization to make sure all necessary sections exist in your config file.
+ConfigManager automatically validates and creates required configuration sections when initialized. The `EnsureConfigSectionsExist()` method is called during static initialization to make sure all necessary sections exist in your config file, and now uses thread-safe double-check locking for better performance.
 
-## Error Handling and Validation
+## Thread Safety and Improved XML Handling
 
-The library includes comprehensive error handling with detailed logging. Operations that fail will return appropriate values (false for boolean operations, default values for getters) and log the error with specific diagnostic information, including:
-
-- Index of problematic entries in configuration
-- Validation failures with detailed reasons
-- Statistics on valid vs. skipped entries
-- Case-insensitive string comparison for more flexible matching
+The library now uses:
+- Double-check locking pattern for thread-safe config validation
+- XDocument for more robust XML processing
+- Better exception handling throughout
+- Improved attribute validation for XML elements
+- Configuration system reset after modifying the config file
 
 ## Best Practices
 
 1. Always specify default values when using `GetValue<T>()` to handle missing configuration entries gracefully
 2. Use the strongly-typed methods rather than accessing the configuration values directly
-3. Ensure drive letter format is correct (single letter followed by colon, e.g., "V:")
-4. Ensure UNC path format is correct (starts with double backslash, e.g., "\\\\server\\share")
-5. When defining directory exclusions:
+3. Leverage collection type support for comma/semicolon-separated values
+4. Use the case-insensitive matching for more flexible configuration handling
+5. Take advantage of the improved drive letter normalization (with or without colon)
+6. When defining directory exclusions:
    - Use separate `<exclude>` elements for each path to exclude
    - Use relative paths (e.g., "logs\\archive", "temp") that are relative to the main directory path
    - Both Windows backslash (`\`) and forward slash (`/`) path separators are supported
-6. Check log output for validation warnings and errors after configuration changes
+7. Check log output for validation warnings and errors after configuration changes
+8. Benefit from the ISO 8601 date handling for DateTime values
 
 ## License
 
